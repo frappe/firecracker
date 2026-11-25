@@ -263,6 +263,7 @@ pub struct Request {
     pub status_addr: GuestAddress,
     sector: u64,
     data_addr: GuestAddress,
+    segments: Vec<(GuestAddress, u32)>,
 }
 
 impl Request {
@@ -283,10 +284,11 @@ impl Request {
             data_addr: GuestAddress(0),
             data_len: 0,
             status_addr: GuestAddress(0),
+            segments: Vec::new(),
         };
 
         let data_desc;
-        let status_desc;
+        let mut status_desc;
         let desc = avail_desc
             .next_descriptor()
             .ok_or(VirtioBlockError::DescriptorChainTooShort)?;
@@ -317,6 +319,27 @@ impl Request {
 
             req.data_addr = data_desc.addr;
             req.data_len = data_desc.len;
+
+            // With VIRTIO_BLK_F_SEG_MAX, a read or write can have more data buffers before the
+            // status. All of them must have the same direction.
+            if matches!(req.r#type, RequestType::In | RequestType::Out) && status_desc.has_next() {
+                req.segments.push((req.data_addr, req.data_len));
+                while status_desc.has_next() {
+                    if req.segments.len() >= super::SEG_MAX as usize
+                        || status_desc.is_write_only() != data_desc.is_write_only()
+                    {
+                        return Err(VirtioBlockError::InvalidDataLength);
+                    }
+                    req.segments.push((status_desc.addr, status_desc.len));
+                    req.data_len = req
+                        .data_len
+                        .checked_add(status_desc.len)
+                        .ok_or(VirtioBlockError::InvalidDataLength)?;
+                    status_desc = status_desc
+                        .next_descriptor()
+                        .ok_or(VirtioBlockError::DescriptorChainTooShort)?;
+                }
+            }
         }
 
         // check request validity
@@ -441,6 +464,21 @@ impl Request {
         discard_supported: bool,
     ) -> ProcessingResult {
         let pending = self.to_pending_request(desc_idx);
+        if !self.segments.is_empty() {
+            let (is_write, latency_metrics, request_type) = match self.r#type {
+                RequestType::Out => (true, &block_metrics.write_agg, VIRTIO_BLK_T_OUT),
+                _ => (false, &block_metrics.read_agg, VIRTIO_BLK_T_IN),
+            };
+            let _metric = latency_metrics.record_latency_metrics();
+            let res = match &mut disk.file_engine {
+                block_io::FileEngine::Sync(engine) => engine
+                    .transfer_vectored(is_write, self.offset(), mem, &self.segments)
+                    .map_err(|err| IoErr::FileEngine(block_io::BlockIoError::Sync(err))),
+                // Only Sync drives offer VIRTIO_BLK_F_SEG_MAX.
+                _ => Err(IoErr::UnsupportedRequest(request_type)),
+            };
+            return ProcessingResult::Executed(pending.finish(mem, res, block_metrics));
+        }
         let res = match self.r#type {
             RequestType::In => {
                 let _metric = block_metrics.read_agg.record_latency_metrics();
@@ -727,6 +765,38 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_multi_segment() {
+        let mem = &default_mem();
+        let queue = VirtQueue::new(GuestAddress(0), mem, 16);
+        let chain = RequestDescriptorChain::new(&queue);
+        chain.set_header(RequestHeader::new(VIRTIO_BLK_T_OUT, 8));
+
+        // header(0) -> data(1) -> data(3) -> status(2)
+        queue.dtable[1].set(0x2000, 0x1000, VIRTQ_DESC_F_NEXT, 3);
+        queue.dtable[3].set(0x5000, 0x1000, VIRTQ_DESC_F_NEXT, 2);
+        let mut q = queue.create_queue();
+        let req = Request::parse(&q.pop().unwrap().unwrap(), mem, NUM_DISK_SECTORS).unwrap();
+        assert_eq!(req.data_len, 0x2000);
+        let buffers = [
+            (GuestAddress(0x2000), 0x1000),
+            (GuestAddress(0x5000), 0x1000),
+        ];
+        assert_eq!(req.segments, buffers);
+        assert_eq!(req.status_addr, GuestAddress(0x3000));
+
+        // Every data buffer must have the same direction.
+        queue.dtable[3].set(0x5000, 0x1000, VIRTQ_DESC_F_NEXT | VIRTQ_DESC_F_WRITE, 2);
+        let mut q = queue.create_queue();
+        Request::parse(&q.pop().unwrap().unwrap(), mem, NUM_DISK_SECTORS).unwrap_err();
+
+        // The total length, not only the first buffer, must fit on the disk.
+        queue.dtable[3].set(0x5000, 0x1000, VIRTQ_DESC_F_NEXT, 2);
+        chain.set_header(RequestHeader::new(VIRTIO_BLK_T_OUT, NUM_DISK_SECTORS - 8));
+        let mut q = queue.create_queue();
+        Request::parse(&q.pop().unwrap().unwrap(), mem, NUM_DISK_SECTORS).unwrap_err();
+    }
+
+    #[test]
     fn test_parse_flush() {
         let mem = &default_mem();
         let queue = VirtQueue::new(GuestAddress(0), mem, 16);
@@ -1010,6 +1080,7 @@ mod tests {
             status_addr,
             sector: sector & (NUM_DISK_SECTORS - sectors_len),
             data_addr,
+            segments: Vec::new(),
         };
         let mut request_header = RequestHeader::new(virtio_request_id, request.sector);
 

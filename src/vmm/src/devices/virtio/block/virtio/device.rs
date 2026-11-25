@@ -33,7 +33,7 @@ use crate::devices::virtio::block::virtio::metrics::{BlockDeviceMetrics, BlockMe
 use crate::devices::virtio::device::{ActiveState, VirtioDevice, VirtioDeviceType};
 use crate::devices::virtio::generated::virtio_blk::{
     VIRTIO_BLK_F_BLK_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_MQ,
-    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_ID_BYTES,
+    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_F_TOPOLOGY, VIRTIO_BLK_ID_BYTES,
 };
 use crate::devices::virtio::generated::virtio_config::VIRTIO_F_VERSION_1;
 use crate::devices::virtio::generated::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
@@ -341,7 +341,8 @@ impl Default for ConfigSpace {
         Self {
             capacity: 0,
             size_max: 0,
-            seg_max: 0,
+            // The guest reads it only if the device offers VIRTIO_BLK_F_SEG_MAX.
+            seg_max: super::SEG_MAX,
             geometry: 0,
             blk_size: 512,
             topology: VirtioBlkTopology {
@@ -581,6 +582,9 @@ impl VirtioBlock {
         }
         if config.discard {
             avail_features |= 1u64 << VIRTIO_BLK_F_DISCARD;
+        }
+        if matches!(resources[0].disk.file_engine, FileEngine::Sync(_)) {
+            avail_features |= 1u64 << VIRTIO_BLK_F_SEG_MAX;
         }
 
         let mut config_space = ConfigSpace {
@@ -1399,7 +1403,8 @@ mod tests {
                 | (1u64 << VIRTIO_RING_F_EVENT_IDX)
                 | (1u64 << VIRTIO_BLK_F_BLK_SIZE)
                 | (1u64 << VIRTIO_BLK_F_TOPOLOGY)
-                | (1u64 << VIRTIO_BLK_F_MQ);
+                | (1u64 << VIRTIO_BLK_F_MQ)
+                | (u64::from(engine == FileEngineType::Sync) << VIRTIO_BLK_F_SEG_MAX);
 
             assert_eq!(
                 block.avail_features_by_page(0),
