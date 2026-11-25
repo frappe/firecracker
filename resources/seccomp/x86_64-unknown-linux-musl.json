@@ -114,6 +114,10 @@
                 "comment": "Used by the block device"
             },
             {
+                "syscall": "pwritev",
+                "comment": "virtio-block multi-segment writes (VIRTIO_BLK_F_SEG_MAX)"
+            },
+            {
                 "syscall": "preadv",
                 "comment": "Used by the imago VMDK disk image backend"
             },
@@ -2022,6 +2026,10 @@
             {
                 "syscall": "preadv",
                 "comment": "Used by imago to read VMDK extents"
+            },
+            {
+                "syscall": "pwritev",
+                "comment": "virtio-block multi-segment writes (VIRTIO_BLK_F_SEG_MAX)"
             },
             {
                 "syscall": "epoll_ctl"
