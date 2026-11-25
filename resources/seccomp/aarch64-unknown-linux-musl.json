@@ -40,6 +40,14 @@
                 "comment": "Used by the VirtIO net device to read from tap"
             },
             {
+                "syscall": "preadv",
+                "comment": "virtio-block multi-segment reads (VIRTIO_BLK_F_SEG_MAX)"
+            },
+            {
+                "syscall": "pwritev",
+                "comment": "virtio-block multi-segment writes (VIRTIO_BLK_F_SEG_MAX)"
+            },
+            {
                 "syscall": "fsync"
             },
             {

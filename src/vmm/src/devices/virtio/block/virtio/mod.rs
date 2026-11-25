@@ -27,6 +27,8 @@ pub const SECTOR_SIZE: u32 = (0x01_u32) << SECTOR_SHIFT;
 /// Keep this bounded so guest fstrim is split into predictable chunks instead
 /// of letting one large discard ioctl block the VMM thread for too long.
 pub const MAX_DISCARD_SECTORS: u32 = (128_u32 << 20) / SECTOR_SIZE;
+/// The most data buffers in one read or write (VIRTIO_BLK_F_SEG_MAX). Only Sync drives offer it.
+pub const SEG_MAX: u32 = 32;
 /// The number of queues of block device.
 pub const BLOCK_NUM_QUEUES: usize = 1;
 pub const BLOCK_QUEUE_SIZES: [u16; BLOCK_NUM_QUEUES] = [FIRECRACKER_MAX_QUEUE_SIZE];
