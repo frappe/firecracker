@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0-hotfix.1]
+
+### Fixed
+
+- virtio-block: offer `VIRTIO_BLK_F_SEG_MAX` (seg_max = 32) on Sync drives. A
+  Linux guest no longer splits large I/O into 4 KiB requests when its memory is
+  fragmented, so the ops rate limit no longer caps throughput at about 12 MiB/s.
+
 ## [1.18.0]
 
 ### Added
