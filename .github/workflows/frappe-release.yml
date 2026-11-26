@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  packages: read
 
 jobs:
   build:
@@ -30,12 +31,14 @@ jobs:
           version=v$(grep -m1 '^version = ' src/firecracker/Cargo.toml | cut -d'"' -f2)
           [ "$version" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME is not $version"; exit 1; }
 
-      # Public ECR limits anonymous pulls, and runners share IPs, so retry with a backoff.
+      # Public ECR limits anonymous pulls by IP, and GitHub runners share IPs. Pull the same image
+      # from our ghcr.io mirror and give it the name that devtool expects.
       - name: Pull the dev container
         run: |
           image=$(source <(grep -E '^DEVCTR_IMAGE(_NO_TAG|_TAG)?=' tools/devtool); echo "$DEVCTR_IMAGE")
-          for i in 1 2 3 4 5 6; do docker pull "$image" && exit 0; sleep $((i * 30)); done
-          exit 1
+          mirror=ghcr.io/frappe/fcuvm:${image##*:}
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "$mirror" && docker tag "$mirror" "$image"
 
       - name: Build
         run: ./tools/devtool -y make_release
