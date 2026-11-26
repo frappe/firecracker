@@ -1,0 +1,65 @@
+name: Frappe release
+
+# Builds the release artifacts in the Firecracker dev container. A pushed v*-hotfix* tag also
+# publishes a GitHub release. A manual run only builds, so you can test a branch first.
+on:
+  push:
+    tags: ["v*-hotfix*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag against the version
+        if: github.ref_type == 'tag'
+        run: |
+          version=v$(grep -m1 '^version = ' src/firecracker/Cargo.toml | cut -d'"' -f2)
+          [ "$version" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME is not $version"; exit 1; }
+
+      - name: Build
+        run: ./tools/devtool -y make_release
+
+      - name: Pack
+        run: |
+          version=v$(grep -m1 '^version = ' src/firecracker/Cargo.toml | cut -d'"' -f2)
+          tgz=firecracker-$version-${{ matrix.arch }}.tgz
+          tar -czf "$tgz" "release-$version-${{ matrix.arch }}"
+          sha256sum "$tgz" > "$tgz.sha256.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: firecracker-*.tgz*
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./tools/release-notes.py "${GITHUB_REF_NAME#v}" > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "Firecracker $GITHUB_REF_NAME" --notes-file notes.md --verify-tag
