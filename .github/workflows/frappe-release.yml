@@ -13,6 +13,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x86_64
@@ -28,6 +29,13 @@ jobs:
         run: |
           version=v$(grep -m1 '^version = ' src/firecracker/Cargo.toml | cut -d'"' -f2)
           [ "$version" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME is not $version"; exit 1; }
+
+      # Public ECR limits anonymous pulls, and runners share IPs, so retry with a backoff.
+      - name: Pull the dev container
+        run: |
+          image=$(source <(grep -E '^DEVCTR_IMAGE(_NO_TAG|_TAG)?=' tools/devtool); echo "$DEVCTR_IMAGE")
+          for i in 1 2 3 4 5 6; do docker pull "$image" && exit 0; sleep $((i * 30)); done
+          exit 1
 
       - name: Build
         run: ./tools/devtool -y make_release
